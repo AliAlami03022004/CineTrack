@@ -14,7 +14,7 @@ const router = Router();
 
 router.get("/version", (_req, res) => {
   const pkg = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "..", "..", "package.json"), "utf-8")
+    fs.readFileSync(path.join(__dirname, "..", "..","..", "package.json"), "utf-8")
   );
   res.status(200).json({ version: pkg.version });
 });
