@@ -1,14 +1,25 @@
 import { Router } from "express";
-import { addToWatchlist, getFeatured, searchMedia } from "../../utils/movieService.js";
+import { addToWatchlist, getFeatured, searchMulti } from "../../utils/movieService.js";
 
 const router = Router();
 
-router.get("/search", (req, res) => {
+router.get("/search", async (req, res, next) => {
   const { query = "", page = "1", type, year, genre } = req.query;
   const filters = { type, year, genre };
   const pageNumber = Number(page) || 1;
-  const results = searchMedia(query, filters, pageNumber);
-  res.status(200).json({ ok: true, ...results, featured: getFeatured() });
+  try {
+    const results = await searchMulti(query, pageNumber, filters);
+    res.status(200).json({
+      ok: true,
+      query,
+      page: pageNumber,
+      totalResults: results.total_results ?? 0,
+      results: results.results ?? [],
+      featured: getFeatured()
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post("/search/watchlist", (req, res) => {

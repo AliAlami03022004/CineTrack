@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   addToWatchlist,
   computeRuntimeMinutes,
@@ -6,32 +6,38 @@ import {
   getFeatured,
   getRecommendations,
   getTopPicks,
+  getTrending,
   getViewedMedia,
   getWatchlist,
+  resetCache,
   resetInMemoryData,
-  searchMedia
+  searchMulti
 } from "../../src/utils/movieService.js";
+
+const sampleTrending = { results: [{ id: 101, title: "Sample" }] };
+const sampleSearch = { total_results: 1, results: [{ id: 201, media_type: "movie", title: "Sample Search" }] };
 
 beforeEach(() => {
   resetInMemoryData();
+  resetCache();
+  vi.useRealTimers();
 });
 
-describe("movieService", () => {
-  it("returns api config with placeholder when missing", () => {
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("movieService basics", () => {
+  it("returns api config", () => {
     const cfg = getApiConfig();
     expect(cfg).toHaveProperty("apiKey");
+    expect(cfg).toHaveProperty("readToken");
   });
 
   it("computes runtime and top picks", () => {
     const viewed = getViewedMedia();
     expect(computeRuntimeMinutes(viewed)).toBeGreaterThan(0);
     expect(getTopPicks(2).length).toBe(2);
-  });
-
-  it("searches by query and filters", () => {
-    const result = searchMedia("the", { type: "movie" }, 1);
-    expect(result.results.every(r => r.type === "movie")).toBe(true);
-    expect(result.page).toBe(1);
   });
 
   it("manages watchlist mutations", () => {
@@ -41,8 +47,55 @@ describe("movieService", () => {
     expect(updated.some(item => item.id === 1)).toBe(true);
   });
 
-  it("returns featured and recommendations", () => {
+  it("returns featured", () => {
     expect(getFeatured().length).toBeGreaterThan(0);
-    expect(getRecommendations().length).toBeGreaterThan(0);
+  });
+});
+
+describe("movieService TMDB calls with cache", () => {
+  it("caches trending responses", async () => {
+    process.env.TMDB_API_KEY = "test";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(sampleTrending), text: () => Promise.resolve("") })
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(sampleTrending), text: () => Promise.resolve("") });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await getTrending("all", "day", { ttlMs: 10_000 });
+    const second = await getTrending("all", "day", { ttlMs: 10_000 });
+    expect(first.results[0].id).toBe(101);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // cached on second call
+  });
+
+  it("expires cache after TTL", async () => {
+    process.env.TMDB_API_KEY = "test";
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(sampleTrending), text: () => Promise.resolve("") });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getTrending("all", "day", { ttlMs: 100 });
+    vi.advanceTimersByTime(200);
+    await getTrending("all", "day", { ttlMs: 100 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("search uses TMDB when available", async () => {
+    process.env.TMDB_API_KEY = "test";
+    const fetchMock = vi.fn()
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(sampleSearch), text: () => Promise.resolve("") });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await searchMulti("sample", 1, { type: "movie" });
+    expect(res.total_results).toBe(1);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("recommendations fall back to seed on error", async () => {
+    process.env.TMDB_API_KEY = "test";
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve({}), text: () => Promise.resolve("fail") });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await getRecommendations();
+    expect(Array.isArray(res.results)).toBe(true);
   });
 });

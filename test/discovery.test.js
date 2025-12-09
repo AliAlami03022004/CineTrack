@@ -1,10 +1,11 @@
 import request from "supertest";
 import { describe, it, expect, beforeEach } from "vitest";
 import app from "../src/app.js";
-import { resetInMemoryData } from "../src/utils/movieService.js";
+import { resetInMemoryData, resetCache } from "../src/utils/movieService.js";
 
 beforeEach(() => {
   resetInMemoryData();
+  resetCache();
 });
 
 describe("GET /discovery", () => {
