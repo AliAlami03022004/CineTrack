@@ -2,6 +2,13 @@
  * Movie/series helpers with TMDB v3 support, in-memory cache (TTL),
  * basic request throttling, and fallbacks when TMDB is unavailable.
  */
+import dotenv from "dotenv";
+dotenv.config();
+
+console.log("HAS AUTH =", hasTmdbAuth());
+console.log("API KEY =", process.env.TMDB_API_KEY);
+console.log("READ TOKEN =", process.env.TMDB_READ_TOKEN);
+
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MIN_INTERVAL_MS = 150; // simple rate limit between requests
@@ -190,4 +197,16 @@ export function resetCache() {
   cache.clear();
   inflight.clear();
   lastRequestAt = 0;
+}
+
+export function getProfileStats() {
+  const viewed = getViewedMedia();
+  const watch = getWatchlist();
+  const totalRuntimeMinutes = computeRuntimeMinutes(viewed);
+  return {
+    totalViewed: viewed.length,
+    totalRuntimeMinutes,
+    totalRuntimeHours: Math.round((totalRuntimeMinutes / 60) * 10) / 10,
+    watchlistCount: watch.length
+  };
 }
