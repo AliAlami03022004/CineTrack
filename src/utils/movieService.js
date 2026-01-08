@@ -3,11 +3,8 @@
  * basic request throttling, and fallbacks when TMDB is unavailable.
  */
 import dotenv from "dotenv";
+import { getCollection } from "./db.js";
 dotenv.config();
-
-console.log("HAS AUTH =", hasTmdbAuth());
-console.log("API KEY =", process.env.TMDB_API_KEY);
-console.log("READ TOKEN =", process.env.TMDB_READ_TOKEN);
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -215,4 +212,106 @@ export function getProfileStats() {
     totalRuntimeHours: Math.round((totalRuntimeMinutes / 60) * 10) / 10,
     watchlistCount: watch.length
   };
+}
+
+async function safeGetCollection(name) {
+  try {
+    const col = await getCollection(name);
+    if (!col) {
+      console.warn(`[db] collection ${name} unavailable (no uri or connection); falling back to memory`);
+    }
+    return col;
+  } catch (err) {
+    console.warn(`[db] failed to get collection ${name}:`, err?.message ?? err);
+    return null;
+  }
+}
+
+export async function getViewedMediaFromDb(userId = "demo-user") {
+  try {
+    const col = await safeGetCollection("viewed");
+    if (!col) return getViewedMedia();
+    const docs = await col.find({ userId }).sort({ viewedAt: -1 }).toArray();
+    console.info(`[db] getViewedMediaFromDb returned ${docs.length} docs for ${userId}`);
+    return docs;
+  } catch (err) {
+    console.warn("[db] getViewedMediaFromDb fallback:", err?.message ?? err);
+    return getViewedMedia();
+  }
+}
+
+export async function getWatchlistFromDb(userId = "demo-user") {
+  try {
+    const col = await safeGetCollection("watchlist");
+    if (!col) return getWatchlist();
+    const docs = await col.find({ userId }).sort({ addedAt: -1 }).toArray();
+    console.info(`[db] getWatchlistFromDb returned ${docs.length} docs for ${userId}`);
+    return docs;
+  } catch (err) {
+    console.warn("[db] getWatchlistFromDb fallback:", err?.message ?? err);
+    return getWatchlist();
+  }
+}
+
+export async function markAsViewedDb(media, userId = "demo-user") {
+  try {
+    const col = await safeGetCollection("viewed");
+    if (!col) return getViewedMedia();
+    const itemId = media?.id ?? media?.itemId ?? media;
+    const seed = seedMedia.find(m => m.id === itemId);
+    const doc = {
+      userId,
+      itemId,
+      type: media.type ?? seed?.type ?? null,
+      title: media.title ?? seed?.title ?? "Unknown",
+      runtime: media.runtime ?? seed?.runtime ?? null,
+      viewedAt: new Date()
+    };
+    await col.updateOne({ userId, itemId }, { $set: doc }, { upsert: true });
+    console.info(`[db] markAsViewedDb upserted item ${itemId} for ${userId}`);
+    return getViewedMediaFromDb(userId);
+  } catch (err) {
+    console.warn("[db] markAsViewedDb fallback:", err?.message ?? err);
+    return getViewedMedia();
+  }
+}
+
+export async function addToWatchlistDb(media, userId = "demo-user") {
+  try {
+    const col = await safeGetCollection("watchlist");
+    const itemId = media?.id ?? media?.itemId ?? media;
+    const seed = seedMedia.find(m => m.id === itemId);
+    if (!col) return addToWatchlist(itemId);
+    const doc = {
+      userId,
+      itemId,
+      type: media.type ?? seed?.type ?? null,
+      title: media.title ?? seed?.title ?? "Unknown",
+      runtime: media.runtime ?? seed?.runtime ?? null,
+      addedAt: new Date()
+    };
+    await col.updateOne({ userId, itemId }, { $set: doc }, { upsert: true });
+    console.info(`[db] addToWatchlistDb upserted item ${itemId} for ${userId}`);
+    return getWatchlistFromDb(userId);
+  } catch (err) {
+    console.warn("[db] addToWatchlistDb fallback:", err?.message ?? err);
+    return addToWatchlist(media?.id ?? media?.itemId ?? media);
+  }
+}
+
+export async function getProfileStatsFromDb(userId = "demo-user") {
+  try {
+    const viewed = await getViewedMediaFromDb(userId);
+    const watch = await getWatchlistFromDb(userId);
+    const totalRuntimeMinutes = computeRuntimeMinutes(viewed);
+    return {
+      totalViewed: viewed.length,
+      totalRuntimeMinutes,
+      totalRuntimeHours: Math.round((totalRuntimeMinutes / 60) * 10) / 10,
+      watchlistCount: watch.length
+    };
+  } catch (err) {
+    console.warn("[db] getProfileStatsFromDb fallback:", err?.message ?? err);
+    return getProfileStats();
+  }
 }

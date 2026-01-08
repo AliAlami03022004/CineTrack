@@ -1,5 +1,10 @@
 import request from "supertest";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("../src/utils/db.js", () => ({
+  getCollection: vi.fn().mockResolvedValue(null)
+}));
+
 import app from "../src/app.js";
 import { resetInMemoryData, resetCache } from "../src/utils/movieService.js";
 

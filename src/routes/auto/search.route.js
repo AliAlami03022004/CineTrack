@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addToWatchlist, getFeatured, getTrending, searchMulti } from "../../utils/movieService.js";
+import { addToWatchlist, addToWatchlistDb, getFeatured, getTrending, searchMulti } from "../../utils/movieService.js";
 
 const router = Router();
 
@@ -24,11 +24,21 @@ router.get("/search", async (req, res, next) => {
   }
 });
 
-router.post("/search/watchlist", (req, res) => {
+router.post("/search/watchlist", async (req, res, next) => {
   const mediaId = Number(req.body?.mediaId);
   if (!mediaId) return res.status(400).json({ ok: false, message: "mediaId is required" });
-  const watchlist = addToWatchlist(mediaId);
-  res.status(201).json({ ok: true, watchlist });
+  try {
+    const watchlist = await addToWatchlistDb({ id: mediaId });
+    res.status(201).json({ ok: true, watchlist });
+  } catch (err) {
+    // fallback in service already, but keep defensive
+    try {
+      const watchlist = addToWatchlist(mediaId);
+      res.status(201).json({ ok: true, watchlist });
+    } catch (inner) {
+      next(inner ?? err);
+    }
+  }
 });
 
 export default router;

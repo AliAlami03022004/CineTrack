@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+vi.mock("../../src/utils/db.js", () => ({
+  getCollection: vi.fn().mockResolvedValue(null)
+}));
 import {
   addToWatchlist,
   computeRuntimeMinutes,
