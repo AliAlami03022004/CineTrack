@@ -13,6 +13,7 @@ const MIN_INTERVAL_MS = 150; // simple rate limit between requests
 const cache = new Map(); // key -> { expiresAt, data }
 const inflight = new Map(); // key -> Promise
 let lastRequestAt = 0;
+let searchIndexesReady = false;
 
 const seedMedia = [
   { id: 1, title: "Inception", type: "movie", runtime: 148, year: 2010, genres: ["sci-fi", "thriller"], score: 9.0, featured: true },
@@ -123,6 +124,35 @@ function fallbackRecommendations() {
   return { results: seedMedia.filter(m => m.score >= 8.5) };
 }
 
+async function ensureSearchIndexes(col) {
+  if (!col || searchIndexesReady) return;
+  try {
+    await col.createIndex({ key: 1 }, { unique: true });
+    await col.createIndex({ cachedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
+    searchIndexesReady = true;
+    console.info("[db] search cache indexes ensured");
+  } catch (err) {
+    console.warn("[db] ensureSearchIndexes failed:", err?.message ?? err);
+  }
+}
+
+function buildSearchKey(query, filters = {}, page = 1) {
+  return [
+    "q",
+    query ?? "",
+    "p",
+    page,
+    "t",
+    filters.type ?? "",
+    "y",
+    filters.year ?? "",
+    "g",
+    filters.genre ?? "",
+    "pop",
+    filters.popularity ?? ""
+  ].join(":");
+}
+
 export async function getTrending(type = "all", timeWindow = "day", { ttlMs = DEFAULT_TTL_MS } = {}) {
   if (!hasTmdbAuth()) return fallbackTrending();
   try {
@@ -133,21 +163,53 @@ export async function getTrending(type = "all", timeWindow = "day", { ttlMs = DE
 }
 
 export async function searchMulti(query, page = 1, filters = {}, { ttlMs = DEFAULT_TTL_MS } = {}) {
+  const key = buildSearchKey(query, filters, page);
   if (!hasTmdbAuth()) return fallbackSearch(query, filters);
   try {
     const params = { query, page, ...filters };
-    // Map a friendly popularity flag to TMDB sort
-    if (filters.popularity === "high") {
-      params.sort_by = "popularity.desc";
-    }
+    if (filters.popularity === "high") params.sort_by = "popularity.desc";
     delete params.popularity;
-    return await requestWithCache(
+
+    const data = await requestWithCache(
       `search:${query}:${page}:${filters.type ?? ""}:${filters.year ?? ""}:${filters.genre ?? ""}`,
       "/search/multi",
       params,
       ttlMs
     );
-  } catch {
+
+    const col = await safeGetCollection("searchCache");
+    if (col) {
+      await ensureSearchIndexes(col);
+      await col.updateOne(
+        { key },
+        {
+          $set: {
+            key,
+            query,
+            filters: { ...filters, page },
+            data,
+            cachedAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+      console.info(`[db] search cache upserted for key ${key}`);
+    }
+    return data;
+  } catch (err) {
+    console.warn("[db] searchMulti TMDB failed, trying Mongo cache:", err?.message ?? err);
+    try {
+      const col = await safeGetCollection("searchCache");
+      if (col) {
+        const cached = await col.findOne({ key });
+        if (cached?.data) {
+          console.info(`[db] search cache hit for key ${key}`);
+          return cached.data;
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[db] search cache lookup failed:", dbErr?.message ?? dbErr);
+    }
     return fallbackSearch(query, filters);
   }
 }
@@ -226,6 +288,7 @@ async function safeGetCollection(name) {
     return null;
   }
 }
+
 
 export async function getViewedMediaFromDb(userId = "demo-user") {
   try {
