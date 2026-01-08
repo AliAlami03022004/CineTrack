@@ -16,6 +16,7 @@ describe("GET /search", () => {
     expect(res.body.query).toBe("the");
     expect(res.body.results.length).toBeGreaterThan(0);
     expect(Array.isArray(res.body.featured)).toBe(true);
+    expect(Array.isArray(res.body.suggestions)).toBe(true);
   });
 });
 

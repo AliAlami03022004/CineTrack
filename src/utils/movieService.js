@@ -138,10 +138,16 @@ export async function getTrending(type = "all", timeWindow = "day", { ttlMs = DE
 export async function searchMulti(query, page = 1, filters = {}, { ttlMs = DEFAULT_TTL_MS } = {}) {
   if (!hasTmdbAuth()) return fallbackSearch(query, filters);
   try {
+    const params = { query, page, ...filters };
+    // Map a friendly popularity flag to TMDB sort
+    if (filters.popularity === "high") {
+      params.sort_by = "popularity.desc";
+    }
+    delete params.popularity;
     return await requestWithCache(
       `search:${query}:${page}:${filters.type ?? ""}:${filters.year ?? ""}:${filters.genre ?? ""}`,
       "/search/multi",
-      { query, page, ...filters },
+      params,
       ttlMs
     );
   } catch {

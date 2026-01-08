@@ -85,7 +85,7 @@ describe("movieService TMDB calls with cache", () => {
       .mockResolvedValue({ ok: true, json: () => Promise.resolve(sampleSearch), text: () => Promise.resolve("") });
     vi.stubGlobal("fetch", fetchMock);
 
-    const res = await searchMulti("sample", 1, { type: "movie" });
+    const res = await searchMulti("sample", 1, { type: "movie", popularity: "high" });
     expect(res.total_results).toBe(1);
     expect(fetchMock).toHaveBeenCalled();
   });
