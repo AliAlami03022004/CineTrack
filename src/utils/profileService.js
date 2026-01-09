@@ -5,10 +5,10 @@
 export function getProfile() {
   return {
     userId: "demo-user",
-    name: "CineTrack Demo",
-    avatarUrl: "https://placehold.co/64x64",
-    bannerUrl: "https://placehold.co/1200x240",
-    bio: "Watchlist + recommandations personnelles",
+    name: process.env.PROFILE_NAME ?? "CineTrack",
+    avatarUrl: process.env.PROFILE_AVATAR_URL ?? "https://placehold.co/96x96",
+    bannerUrl: process.env.PROFILE_BANNER_URL ?? "https://placehold.co/1200x240",
+    bio: process.env.PROFILE_BIO ?? "",
     timezone: "Europe/Paris"
   };
 }

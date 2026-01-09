@@ -41,9 +41,10 @@ router.post("/discovery/watchlist", (req, res) => {
 });
 
 router.post("/discovery/like", (req, res) => {
-  const mediaId = Number(req.body?.mediaId);
+  const media = req.body?.media ?? {};
+  const mediaId = Number(req.body?.mediaId ?? media?.id);
   if (!mediaId) return res.status(400).json({ ok: false, message: "mediaId is required" });
-  likeMediaDb({ id: mediaId })
+  likeMediaDb({ ...media, id: mediaId })
     .then(signals => res.status(201).json({ ok: true, signals }))
     .catch(err => {
       console.warn("[db] like fallback:", err?.message ?? err);

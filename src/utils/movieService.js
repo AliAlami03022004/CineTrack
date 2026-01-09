@@ -246,6 +246,11 @@ export function addToWatchlist(mediaId) {
   return watchlist;
 }
 
+export function removeFromWatchlist(mediaId) {
+  watchlist = watchlist.filter(m => m.id !== mediaId);
+  return watchlist;
+}
+
 export function getTopPicks(limit = 3) {
   return [...viewedMedia].sort((a, b) => b.score - a.score).slice(0, limit);
 }
@@ -301,7 +306,7 @@ export async function getViewedMediaFromDb(userId = "demo-user") {
     if (!col) return getViewedMedia();
     const docs = await col.find({ userId }).sort({ viewedAt: -1 }).toArray();
     console.info(`[db] getViewedMediaFromDb returned ${docs.length} docs for ${userId}`);
-    return docs;
+    return docs.length ? docs : getViewedMedia();
   } catch (err) {
     console.warn("[db] getViewedMediaFromDb fallback:", err?.message ?? err);
     return getViewedMedia();
@@ -353,8 +358,8 @@ export async function addToWatchlistDb(media, userId = "demo-user") {
     const doc = {
       userId,
       itemId,
-      type: media.type ?? seed?.type ?? null,
-      title: media.title ?? seed?.title ?? "Unknown",
+      type: media.type ?? media.media_type ?? seed?.type ?? null,
+      title: media.title ?? media.name ?? seed?.title ?? "Unknown",
       runtime: media.runtime ?? seed?.runtime ?? null,
       addedAt: new Date()
     };
@@ -364,6 +369,19 @@ export async function addToWatchlistDb(media, userId = "demo-user") {
   } catch (err) {
     console.warn("[db] addToWatchlistDb fallback:", err?.message ?? err);
     return addToWatchlist(media?.id ?? media?.itemId ?? media);
+  }
+}
+
+export async function removeFromWatchlistDb(mediaId, userId = "demo-user") {
+  try {
+    const col = await safeGetCollection("watchlist");
+    if (!col) return removeFromWatchlist(mediaId);
+    await col.deleteOne({ userId, itemId: mediaId });
+    console.info(`[db] removeFromWatchlistDb removed item ${mediaId} for ${userId}`);
+    return getWatchlistFromDb(userId);
+  } catch (err) {
+    console.warn("[db] removeFromWatchlistDb fallback:", err?.message ?? err);
+    return removeFromWatchlist(mediaId);
   }
 }
 
@@ -405,8 +423,8 @@ export async function likeMediaDb(media, userId = "demo-user") {
     const doc = {
       userId,
       itemId,
-      type: media.type ?? seed?.type ?? null,
-      title: media.title ?? seed?.title ?? "Unknown",
+      type: media.type ?? media.media_type ?? seed?.type ?? null,
+      title: media.title ?? media.name ?? seed?.title ?? "Unknown",
       runtime: media.runtime ?? seed?.runtime ?? null,
       liked: true,
       likedAt: new Date()
@@ -428,15 +446,33 @@ export async function getPersonalizedRecommendations(userId = "demo-user", categ
   try {
     const base = await getRecommendations({ type: category === "tv" ? "tv" : "movie" });
     const signals = await getRecentSignalsFromDb(userId, 50);
-    const signalItems = signals.map(sig => ({
-      id: sig.itemId,
-      media_type: sig.type,
-      title: sig.title,
-      name: sig.title,
-      runtime: sig.runtime,
-      score: 10,
-      fromSignals: true
-    }));
+    const baseMap = new Map((base.results ?? []).filter(item => item?.id).map(item => [item.id, item]));
+    const col = await safeGetCollection("signals");
+    const updates = [];
+    const signalItems = signals.map(sig => {
+      const baseItem = baseMap.get(sig.itemId);
+      const title = sig.title && sig.title !== "Unknown" ? sig.title : (baseItem?.title || baseItem?.name || sig.title);
+      const type = sig.type || baseItem?.media_type || baseItem?.type || null;
+      const runtime = sig.runtime ?? baseItem?.runtime ?? null;
+      if (col && baseItem && (sig.title === "Unknown" || !sig.title || !sig.type)) {
+        updates.push(col.updateOne(
+          { userId, itemId: sig.itemId },
+          { $set: { title: title ?? "Unknown", type, runtime } }
+        ));
+      }
+      return {
+        id: sig.itemId,
+        media_type: type,
+        title,
+        name: title,
+        runtime,
+        score: 10,
+        fromSignals: true
+      };
+    }).filter(item => item.title && item.title !== "Unknown");
+    if (updates.length) {
+      Promise.allSettled(updates).catch(() => {});
+    }
     const seen = new Set(signalItems.map(s => s.id));
     const combined = [...signalItems];
     for (const item of base.results ?? []) {

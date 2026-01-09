@@ -24,10 +24,7 @@ router.get("/home", async (_req, res, next) => {
     res.status(200).json({
       ok: true,
       profile,
-      stats: {
-        totalViewed: stats.totalViewed,
-        totalRuntimeMinutes: stats.totalRuntimeMinutes
-      },
+      stats,
       viewed,
       top: getTopPicks(3),
       watchlist,
