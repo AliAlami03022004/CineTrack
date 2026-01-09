@@ -1,12 +1,21 @@
 import { Router } from "express";
-import { addToWatchlist, addToWatchlistDb, getRecommendations, getTrending, getWatchlist, getWatchlistFromDb } from "../../utils/movieService.js";
+import {
+  addToWatchlist,
+  addToWatchlistDb,
+  getPersonalizedRecommendations,
+  getRecommendations,
+  getTrending,
+  getWatchlist,
+  getWatchlistFromDb,
+  likeMediaDb
+} from "../../utils/movieService.js";
 
 const router = Router();
 
 router.get("/discovery", async (req, res, next) => {
   try {
     const { category = "all" } = req.query;
-    const recommendations = await getRecommendations({ type: category === "tv" ? "tv" : "movie" });
+    const recommendations = await getPersonalizedRecommendations("demo-user", category);
     const suggestions = await getTrending(category === "tv" ? "tv" : "all", "week");
     res.status(200).json({
       ok: true,
@@ -28,6 +37,17 @@ router.post("/discovery/watchlist", (req, res) => {
     .catch(() => {
       const watchlist = addToWatchlist(mediaId);
       res.status(201).json({ ok: true, watchlist });
+    });
+});
+
+router.post("/discovery/like", (req, res) => {
+  const mediaId = Number(req.body?.mediaId);
+  if (!mediaId) return res.status(400).json({ ok: false, message: "mediaId is required" });
+  likeMediaDb({ id: mediaId })
+    .then(signals => res.status(201).json({ ok: true, signals }))
+    .catch(err => {
+      console.warn("[db] like fallback:", err?.message ?? err);
+      res.status(500).json({ ok: false, message: "could not like item" });
     });
 });
 

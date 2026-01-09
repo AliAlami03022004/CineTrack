@@ -6,11 +6,14 @@ vi.mock("../src/utils/db.js", () => ({
 }));
 
 import app from "../src/app.js";
-import { resetInMemoryData, resetCache } from "../src/utils/movieService.js";
+import { resetInMemoryData, resetCache, resetSignals } from "../src/utils/movieService.js";
 
 beforeEach(() => {
+  process.env.TMDB_API_KEY = "";
+  process.env.TMDB_READ_TOKEN = "";
   resetInMemoryData();
   resetCache();
+  resetSignals();
 });
 
 describe("GET /discovery", () => {
@@ -34,6 +37,20 @@ describe("POST /discovery/watchlist", () => {
 
   it("validates missing mediaId", async () => {
     const res = await request(app).post("/discovery/watchlist").send({});
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /discovery/like", () => {
+  it("registers a like signal", async () => {
+    const res = await request(app).post("/discovery/like").send({ mediaId: 1 });
+    expect(res.status).toBe(201);
+    expect(res.body.ok).toBe(true);
+    expect(Array.isArray(res.body.signals)).toBe(true);
+  });
+
+  it("validates missing mediaId", async () => {
+    const res = await request(app).post("/discovery/like").send({});
     expect(res.status).toBe(400);
   });
 });

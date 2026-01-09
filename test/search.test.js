@@ -9,6 +9,8 @@ import app from "../src/app.js";
 import { resetInMemoryData, resetCache } from "../src/utils/movieService.js";
 
 beforeEach(() => {
+  process.env.TMDB_API_KEY = "";
+  process.env.TMDB_READ_TOKEN = "";
   resetInMemoryData();
   resetCache();
 });

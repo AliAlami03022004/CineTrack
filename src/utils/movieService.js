@@ -25,6 +25,7 @@ const seedMedia = [
 
 let viewedMedia = seedMedia.slice(0, 3);
 let watchlist = seedMedia.slice(3);
+let likedSignals = [];
 
 function hasTmdbAuth() {
   return Boolean(process.env.TMDB_READ_TOKEN || process.env.TMDB_API_KEY);
@@ -264,6 +265,10 @@ export function resetCache() {
   lastRequestAt = 0;
 }
 
+export function resetSignals() {
+  likedSignals = [];
+}
+
 export function getProfileStats() {
   const viewed = getViewedMedia();
   const watch = getWatchlist();
@@ -376,5 +381,74 @@ export async function getProfileStatsFromDb(userId = "demo-user") {
   } catch (err) {
     console.warn("[db] getProfileStatsFromDb fallback:", err?.message ?? err);
     return getProfileStats();
+  }
+}
+
+export async function getRecentSignalsFromDb(userId = "demo-user", limit = 20) {
+  try {
+    const col = await safeGetCollection("signals");
+    if (!col) return likedSignals;
+    const docs = await col.find({ userId }).sort({ likedAt: -1, viewedAt: -1 }).limit(limit).toArray();
+    console.info(`[db] getRecentSignalsFromDb returned ${docs.length} docs for ${userId}`);
+    return docs;
+  } catch (err) {
+    console.warn("[db] getRecentSignalsFromDb fallback:", err?.message ?? err);
+    return likedSignals;
+  }
+}
+
+export async function likeMediaDb(media, userId = "demo-user") {
+  try {
+    const col = await safeGetCollection("signals");
+    const itemId = media?.id ?? media?.itemId ?? media;
+    const seed = seedMedia.find(m => m.id === itemId);
+    const doc = {
+      userId,
+      itemId,
+      type: media.type ?? seed?.type ?? null,
+      title: media.title ?? seed?.title ?? "Unknown",
+      runtime: media.runtime ?? seed?.runtime ?? null,
+      liked: true,
+      likedAt: new Date()
+    };
+    if (!col) {
+      likedSignals = [{ ...doc }, ...likedSignals.filter(s => s.itemId !== itemId)];
+      return likedSignals;
+    }
+    await col.updateOne({ userId, itemId }, { $set: doc }, { upsert: true });
+    console.info(`[db] likeMediaDb upserted item ${itemId} for ${userId}`);
+    return getRecentSignalsFromDb(userId);
+  } catch (err) {
+    console.warn("[db] likeMediaDb fallback:", err?.message ?? err);
+    return likedSignals;
+  }
+}
+
+export async function getPersonalizedRecommendations(userId = "demo-user", category = "all") {
+  try {
+    const base = await getRecommendations({ type: category === "tv" ? "tv" : "movie" });
+    const signals = await getRecentSignalsFromDb(userId, 50);
+    const signalItems = signals.map(sig => ({
+      id: sig.itemId,
+      media_type: sig.type,
+      title: sig.title,
+      name: sig.title,
+      runtime: sig.runtime,
+      score: 10,
+      fromSignals: true
+    }));
+    const seen = new Set(signalItems.map(s => s.id));
+    const combined = [...signalItems];
+    for (const item of base.results ?? []) {
+      if (item?.id && !seen.has(item.id)) {
+        seen.add(item.id);
+        combined.push(item);
+      }
+    }
+    console.info(`[db] personalized recommendations built with ${signals.length} signals`);
+    return { results: combined };
+  } catch (err) {
+    console.warn("[db] getPersonalizedRecommendations fallback:", err?.message ?? err);
+    return getRecommendations({ type: category === "tv" ? "tv" : "movie" });
   }
 }
