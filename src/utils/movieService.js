@@ -226,6 +226,26 @@ export async function getRecommendations({ type = "movie", id } = {}, { ttlMs = 
   }
 }
 
+async function getTmdbDetails(itemId, type) {
+  if (!hasTmdbAuth() || !itemId || !type) return null;
+  try {
+    return await requestWithCache(`details:${type}:${itemId}`, `/${type}/${itemId}`, {}, 24 * 60 * 60 * 1000);
+  } catch {
+    return null;
+  }
+}
+
+async function getTmdbSearchMatch(title, type) {
+  if (!hasTmdbAuth() || !title) return null;
+  try {
+    const data = await requestWithCache(`search-title:${type}:${title}`, "/search/multi", { query: title }, 24 * 60 * 60 * 1000);
+    const results = data?.results ?? [];
+    return results.find(r => r.media_type === type) || results[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 export function computeRuntimeMinutes(items) {
   return items.reduce((total, item) => total + (item.runtime ?? 0), 0);
 }
@@ -251,8 +271,13 @@ export function removeFromWatchlist(mediaId) {
   return watchlist;
 }
 
-export function getTopPicks(limit = 3) {
-  return [...viewedMedia].sort((a, b) => b.score - a.score).slice(0, limit);
+export function getTopPicks(limit = 3, items = viewedMedia) {
+  const list = [...(items ?? [])];
+  const hasScore = list.some(item => item.score || item.vote_average);
+  if (hasScore) {
+    list.sort((a, b) => (b.score ?? b.vote_average ?? 0) - (a.score ?? a.vote_average ?? 0));
+  }
+  return list.slice(0, limit);
 }
 
 export function getFeatured(timeWindow = "week") {
@@ -299,6 +324,51 @@ async function safeGetCollection(name) {
   }
 }
 
+async function enrichSeedItems(items) {
+  if (!items?.length || !hasTmdbAuth()) return items ?? [];
+  return Promise.all(items.map(async (item) => {
+    if (item.poster_path || item.posterPath) return item;
+    const match = await getTmdbSearchMatch(item.title, item.type);
+    if (!match) return item;
+    const posterPath = match.poster_path || match.backdrop_path;
+    if (posterPath) {
+      item.poster_path = posterPath;
+    }
+    if (match.release_date && !item.release_date) item.release_date = match.release_date;
+    if (match.first_air_date && !item.first_air_date) item.first_air_date = match.first_air_date;
+    return item;
+  }));
+}
+
+async function enrichDocsWithPosters(docs, col) {
+  if (!docs.length || !hasTmdbAuth()) return docs;
+  const updates = [];
+  const enriched = await Promise.all(docs.map(async (doc) => {
+    const type = doc.type || doc.media_type;
+    if (!type || !doc.itemId) return doc;
+    const missingPoster = !(doc.posterPath || doc.poster_path || doc.backdropPath || doc.backdrop_path);
+    const missingTitle = !doc.title || doc.title === "Unknown";
+    if (!missingPoster && !missingTitle) return doc;
+    const searchMatch = doc.title ? await getTmdbSearchMatch(doc.title, type) : null;
+    const details = searchMatch ? null : await getTmdbDetails(doc.itemId, type);
+    const source = searchMatch || details;
+    if (!source) return doc;
+    const posterPath = source.poster_path || source.backdrop_path || doc.posterPath || doc.backdropPath || null;
+    const title = missingTitle ? (source.title || source.name || doc.title) : doc.title;
+    const update = {};
+    if (posterPath) update.posterPath = posterPath;
+    if (title) update.title = title;
+    if (Object.keys(update).length && col) {
+      updates.push(col.updateOne({ itemId: doc.itemId, userId: doc.userId }, { $set: update }));
+    }
+    return { ...doc, ...update };
+  }));
+  if (updates.length) {
+    Promise.allSettled(updates).catch(() => {});
+  }
+  return enriched;
+}
+
 
 export async function getViewedMediaFromDb(userId = "demo-user") {
   try {
@@ -306,10 +376,12 @@ export async function getViewedMediaFromDb(userId = "demo-user") {
     if (!col) return getViewedMedia();
     const docs = await col.find({ userId }).sort({ viewedAt: -1 }).toArray();
     console.info(`[db] getViewedMediaFromDb returned ${docs.length} docs for ${userId}`);
-    return docs.length ? docs : getViewedMedia();
+    const enriched = await enrichDocsWithPosters(docs, col);
+    if (enriched.length) return enriched;
+    return await enrichSeedItems(getViewedMedia());
   } catch (err) {
     console.warn("[db] getViewedMediaFromDb fallback:", err?.message ?? err);
-    return getViewedMedia();
+    return await enrichSeedItems(getViewedMedia());
   }
 }
 
@@ -319,7 +391,7 @@ export async function getWatchlistFromDb(userId = "demo-user") {
     if (!col) return getWatchlist();
     const docs = await col.find({ userId }).sort({ addedAt: -1 }).toArray();
     console.info(`[db] getWatchlistFromDb returned ${docs.length} docs for ${userId}`);
-    return docs;
+    return await enrichDocsWithPosters(docs, col);
   } catch (err) {
     console.warn("[db] getWatchlistFromDb fallback:", err?.message ?? err);
     return getWatchlist();
@@ -361,6 +433,8 @@ export async function addToWatchlistDb(media, userId = "demo-user") {
       type: media.type ?? media.media_type ?? seed?.type ?? null,
       title: media.title ?? media.name ?? seed?.title ?? "Unknown",
       runtime: media.runtime ?? seed?.runtime ?? null,
+      posterPath: media.poster_path ?? media.posterPath ?? null,
+      backdropPath: media.backdrop_path ?? media.backdropPath ?? null,
       addedAt: new Date()
     };
     await col.updateOne({ userId, itemId }, { $set: doc }, { upsert: true });
@@ -426,6 +500,8 @@ export async function likeMediaDb(media, userId = "demo-user") {
       type: media.type ?? media.media_type ?? seed?.type ?? null,
       title: media.title ?? media.name ?? seed?.title ?? "Unknown",
       runtime: media.runtime ?? seed?.runtime ?? null,
+      posterPath: media.poster_path ?? media.posterPath ?? null,
+      backdropPath: media.backdrop_path ?? media.backdropPath ?? null,
       liked: true,
       likedAt: new Date()
     };
@@ -454,10 +530,11 @@ export async function getPersonalizedRecommendations(userId = "demo-user", categ
       const title = sig.title && sig.title !== "Unknown" ? sig.title : (baseItem?.title || baseItem?.name || sig.title);
       const type = sig.type || baseItem?.media_type || baseItem?.type || null;
       const runtime = sig.runtime ?? baseItem?.runtime ?? null;
+      const posterPath = sig.posterPath || sig.poster_path || baseItem?.poster_path || baseItem?.backdrop_path || null;
       if (col && baseItem && (sig.title === "Unknown" || !sig.title || !sig.type)) {
         updates.push(col.updateOne(
           { userId, itemId: sig.itemId },
-          { $set: { title: title ?? "Unknown", type, runtime } }
+          { $set: { title: title ?? "Unknown", type, runtime, posterPath } }
         ));
       }
       return {
@@ -466,6 +543,7 @@ export async function getPersonalizedRecommendations(userId = "demo-user", categ
         title,
         name: title,
         runtime,
+        poster_path: posterPath,
         score: 10,
         fromSignals: true
       };

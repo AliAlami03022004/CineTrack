@@ -26,7 +26,7 @@ router.get("/home", async (_req, res, next) => {
       profile,
       stats,
       viewed,
-      top: getTopPicks(3),
+      top: getTopPicks(3, viewed),
       watchlist,
       trending: trending.results ?? []
     });
